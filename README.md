@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Travel Policy Copilot
 
-## Getting Started
+A company uploads its travel policy. An LLM turns it into structured rules. An admin approves each rule. A traveller then books through a chat, and a deterministic engine checks every option against the approved rules. Out-of-policy trips go to an approver.
 
-First, run the development server:
+**The design decision:** the LLM never decides compliance. It proposes rules, a human approves them, and plain tested code applies them.
 
-```bash
+## AI use
+
+Claude Code wrote most of this codebase, and the Claude API runs the extraction and the chat. Hasby directs the work and reviews it. The build plan is kept outside this repo in `../docs/PLAN.md`; specs and agent configuration move into the repo with the eval work.
+
+## Status (v1, in progress)
+
+| Part | State |
+|---|---|
+| Rule types and Zod validation (closed set of five) | Done, unit tested |
+| Deterministic policy engine (options and trips) | Done, unit tested |
+| Postgres schema and repository (Drizzle) | Done, integration tested against Postgres 16 |
+| Policy extraction with Claude (structured outputs) | Written, **not yet run against the live API** |
+| Booking chat with tools and streaming | Written, **not yet run against the live API** |
+| Admin rule review and approval queue | Done, builds and renders |
+| Eval set and published accuracy | **Not started** (needs labelled policies, see below) |
+| Deployment | Not started (planned for later) |
+| Sign-in, rate limits, daily spend cap | **Not built.** Required before any public demo |
+
+## How it works
+
+- `src/lib/policy/rules.ts`: the five rule types (cabin class, flight price cap, hotel nightly cap by city tier, advance booking, approval required). The LLM output must match these shapes.
+- `src/lib/policy/extract.ts`: sends the policy as data (not instructions), with structured outputs. It fails closed on refusal, truncation or a schema mismatch.
+- `src/lib/policy/engine.ts`: `checkOption` and `checkTrip`. Pure functions, no LLM and no I/O. A hotel whose city tier has no cap is out of policy when the policy defines any hotel caps.
+- `src/lib/chat/tools.ts`: search tools and `book_trip`. Each input is validated with Zod before it runs.
+- `src/app/api/chat/route.ts`: streams one chat turn, runs tools in a bounded loop (max five rounds), checks `stop_reason` before running any tool.
+- `src/lib/repo.ts`: all database access. Only approved rules reach the engine.
+
+## Run it locally
+
+Needs Node 24 and Postgres 16.
+
+```sh
+npm install
+cp .env.example .env.local   # set DATABASE_URL
+npx drizzle-kit migrate
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The LLM features need `ANTHROPIC_API_KEY`. Without it, extraction and chat return errors. Everything else runs.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Checks: `npm run typecheck`, `npm test`, `npm run lint`, `npm run build`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Limits and known gaps
 
-## Learn More
+- Inventory is **synthetic** (`src/lib/inventory.ts`). No real supplier, payment or price is involved.
+- All amounts are USD. Policies in another currency are not supported in v1.
+- Approval queue and policy pages have no sign-in. Anyone with the link can approve.
+- Editing a rule replaces its status only. Versioning of rule edits is not built.
+- Uploaded files are not stored; the extracted policy text is.
 
-To learn more about Next.js, take a look at the following resources:
+## Eval (planned)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Target for v1: 15 policies, at least 5 real public ones and 10 synthetic. Precision and recall per rule type, with the misses listed. Labelled expected rules are written by the domain owner, not by the model that is being tested.
